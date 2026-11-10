@@ -22,6 +22,14 @@ DOCKER_ARCH ?= amd64
 DOCKER_SRC_IMAGE ?= "debian:13"
 STDEB ?= "git+https://github.com/svpcom/stdeb"
 QEMU_CPU ?= "max"
+# no: a host that runs DOCKER_ARCH itself (an arm64 board runs armhf by its
+# 32-bit EL0) builds without qemu; DOCKER_SETARCH - the architecture the
+# build in the container sees (setarch): linux32 there for armhf, else
+# uname -m is aarch64
+DOCKER_QEMU ?= yes
+DOCKER_SETARCH ?=
+DOCKER_BUILD_OPTS ?=
+DOCKER_RUN_OPTS ?=
 
 export VERSION COMMIT SOURCE_DATE_EPOCH
 
@@ -108,18 +116,22 @@ pylint:
 clean:
 	rm -rf env wfb_rx wfb_tx wfb_tx_cmd wfb_tun wfb_rtsp wfb_keygen dist deb_dist build wfb_ng.egg-info wfb_ng-*.tar.gz _trial_temp *~ src/*.o fec_test libsodium_test radiotap_test
 
-deb_docker:  /opt/qemu/bin
+deb_docker:  $(if $(filter yes,$(DOCKER_QEMU)),/opt/qemu/bin)
+ifeq ($(DOCKER_QEMU),yes)
 	@if ! [ -d /opt/qemu ]; then echo "Docker cross build requires patched QEMU!\nApply ./scripts/qemu/qemu.patch to qemu-7.2.0 and build it:\n  ./configure --prefix=/opt/qemu --static --disable-system && make && sudo make install"; exit 1; fi
 	if ! ls /proc/sys/fs/binfmt_misc | grep -q qemu ; then sudo ./scripts/qemu/qemu-binfmt-conf.sh --qemu-path /opt/qemu/bin --persistent yes; fi
+endif
 	cp -a Makefile docker/src/
-	TAG="wfb-ng:build-`date +%s`"; docker build --platform linux/$(DOCKER_ARCH) -t $$TAG --build-arg SRC_IMAGE=$(DOCKER_SRC_IMAGE) --build-arg QEMU_CPU=$(QEMU_CPU) -f docker/Dockerfile.debian docker && \
-	docker run --privileged --platform linux/$(DOCKER_ARCH) -i --rm -v $(PWD):/build $$TAG bash -c "trap 'chown -R --reference=/build/. /build' EXIT; export VERSION=$(VERSION) COMMIT=$(COMMIT) SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) CFLAGS='$(CFLAGS)' && /sbin/sysctl net.unix.max_dgram_qlen=512 && cd /build && make clean && make test && make deb"
+	TAG="wfb-ng:build-`date +%s`"; docker build $(DOCKER_BUILD_OPTS) --platform linux/$(DOCKER_ARCH) -t $$TAG --build-arg SRC_IMAGE=$(DOCKER_SRC_IMAGE) --build-arg QEMU_CPU=$(QEMU_CPU) -f docker/Dockerfile.debian docker && \
+	docker run --privileged $(DOCKER_RUN_OPTS) --platform linux/$(DOCKER_ARCH) -i --rm -v $(PWD):/build $$TAG $(if $(DOCKER_SETARCH),setarch $(DOCKER_SETARCH)) bash -c "trap 'chown -R --reference=/build/. /build' EXIT; export VERSION=$(VERSION) COMMIT=$(COMMIT) SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) CFLAGS='$(CFLAGS)' && /sbin/sysctl net.unix.max_dgram_qlen=512 && cd /build && make clean && make test && make deb"
 	docker image ls -q "wfb-ng:build-*" | uniq | tail -n+6 | while read i ; do docker rmi -f $$i; done
 
-rpm_docker:  /opt/qemu/bin
+rpm_docker:  $(if $(filter yes,$(DOCKER_QEMU)),/opt/qemu/bin)
+ifeq ($(DOCKER_QEMU),yes)
 	@if ! [ -d /opt/qemu ]; then echo "Docker cross build requires patched QEMU!\nApply ./scripts/qemu/qemu.patch to qemu-7.2.0 and build it:\n  ./configure --prefix=/opt/qemu --static --disable-system && make && sudo make install"; exit 1; fi
 	if ! ls /proc/sys/fs/binfmt_misc | grep -q qemu ; then sudo ./scripts/qemu/qemu-binfmt-conf.sh --qemu-path /opt/qemu/bin --persistent yes; fi
+endif
 	cp -a Makefile docker/src/
-	TAG="wfb-ng:build-`date +%s`"; docker build --platform linux/$(DOCKER_ARCH) -t $$TAG --build-arg SRC_IMAGE=$(DOCKER_SRC_IMAGE) --build-arg QEMU_CPU=$(QEMU_CPU) -f docker/Dockerfile.redhat docker && \
-	docker run --privileged --platform linux/$(DOCKER_ARCH) -i --rm -v $(PWD):/build $$TAG bash -c "trap 'chown -R --reference=/build/. /build' EXIT; export VERSION=$(VERSION) COMMIT=$(COMMIT) SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) CFLAGS='$(CFLAGS)' && /sbin/sysctl net.unix.max_dgram_qlen=512 && cd /build && make clean && make test && make rpm"
+	TAG="wfb-ng:build-`date +%s`"; docker build $(DOCKER_BUILD_OPTS) --platform linux/$(DOCKER_ARCH) -t $$TAG --build-arg SRC_IMAGE=$(DOCKER_SRC_IMAGE) --build-arg QEMU_CPU=$(QEMU_CPU) -f docker/Dockerfile.redhat docker && \
+	docker run --privileged $(DOCKER_RUN_OPTS) --platform linux/$(DOCKER_ARCH) -i --rm -v $(PWD):/build $$TAG $(if $(DOCKER_SETARCH),setarch $(DOCKER_SETARCH)) bash -c "trap 'chown -R --reference=/build/. /build' EXIT; export VERSION=$(VERSION) COMMIT=$(COMMIT) SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) CFLAGS='$(CFLAGS)' && /sbin/sysctl net.unix.max_dgram_qlen=512 && cd /build && make clean && make test && make rpm"
 	docker image ls -q "wfb-ng:build-*" | uniq | tail -n+6 | while read i ; do docker rmi -f $$i; done
